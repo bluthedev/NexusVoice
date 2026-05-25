@@ -88,7 +88,7 @@ function App() {
     setIsPlaying(false);
   };
 
-  const handleDownload = async (format: 'mp3' | 'wav') => {
+  const handleDownload = async (format: 'mp3' | 'wav' | 'mp4') => {
     if (!text) return;
     setIsDownloading(true);
     setError(null);

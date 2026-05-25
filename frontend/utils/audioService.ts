@@ -1,43 +1,53 @@
+let activeAudio: HTMLAudioElement | null = null;
+
 export const playText = (text: string, onEnd: () => void, onStart: () => void) => {
-  if (!window.speechSynthesis) {
-    alert("Your browser does not support Speech Synthesis.");
-    return;
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio = null;
   }
 
-  window.speechSynthesis.cancel(); // Stop any ongoing speech
+  const safeText = text.slice(0, 400); 
+  const encodedText = encodeURIComponent(safeText);
+  const url = `https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodedText}`;
+
+  activeAudio = new Audio(url);
   
-  const utterance = new SpeechSynthesisUtterance(text);
-  
-  // Try to find a good English voice
-  const voices = window.speechSynthesis.getVoices();
-  const preferredVoice = voices.find(v => v.lang.includes('en-US') && v.name.includes('Google')) || 
-                         voices.find(v => v.lang.includes('en-GB')) || 
-                         voices[0];
-                         
-  if (preferredVoice) {
-    utterance.voice = preferredVoice;
-  }
-  
-  utterance.rate = 0.9; // Slightly slower for better comprehension
-  utterance.pitch = 1;
-  
-  utterance.onstart = onStart;
-  utterance.onend = onEnd;
-  utterance.onerror = (e) => {
-    console.error("Speech synthesis error", e);
+  activeAudio.addEventListener('canplaythrough', () => {
+    if (activeAudio) {
+      activeAudio.play().catch((err) => {
+        console.error("Audio playback failed:", err);
+        onEnd();
+      });
+    }
+  });
+
+  activeAudio.addEventListener('play', () => {
+    onStart();
+  });
+
+  activeAudio.addEventListener('ended', () => {
     onEnd();
-  };
+    activeAudio = null;
+  });
 
-  window.speechSynthesis.speak(utterance);
+  activeAudio.addEventListener('error', (e) => {
+    console.error("Audio playback error", e);
+    onEnd();
+    activeAudio = null;
+  });
 };
 
 export const stopAudio = () => {
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio = null;
+  }
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
   }
 };
 
-export const downloadAudio = async (text: string, format: 'mp3' | 'wav' = 'wav') => {
+export const downloadAudio = async (text: string, format: 'mp3' | 'wav' | 'mp4' = 'wav') => {
   if (!text.trim()) throw new Error("No text to download");
 
   // Limit text length to avoid URI Too Long errors on public APIs
