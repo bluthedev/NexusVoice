@@ -76,8 +76,9 @@ function App() {
 
   const handlePlay = () => {
     if (!text) return;
+    setError(null);
     playText(
-      text, 
+      text,
       () => setIsPlaying(false), // onEnd
       () => setIsPlaying(true)   // onStart
     );

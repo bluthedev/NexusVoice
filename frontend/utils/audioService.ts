@@ -1,49 +1,51 @@
 let activeAudio: HTMLAudioElement | null = null;
 
-export const playText = (text: string, onEnd: () => void, onStart: () => void) => {
+export const playText = (text: string, onEnd: () => void, onStart: () => void): void => {
+  // Stop any currently playing audio
   if (activeAudio) {
     activeAudio.pause();
+    activeAudio.src = '';
     activeAudio = null;
   }
 
-  const safeText = text.slice(0, 400); 
+  const safeText = text.slice(0, 400);
   const encodedText = encodeURIComponent(safeText);
   const url = `https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodedText}`;
 
-  activeAudio = new Audio(url);
-  
-  activeAudio.addEventListener('canplaythrough', () => {
-    if (activeAudio) {
-      activeAudio.play().catch((err) => {
-        console.error("Audio playback failed:", err);
-        onEnd();
-      });
-    }
-  });
+  const audio = new Audio(url);
+  activeAudio = audio;
 
-  activeAudio.addEventListener('play', () => {
+  audio.addEventListener('play', () => {
     onStart();
   });
 
-  activeAudio.addEventListener('ended', () => {
+  audio.addEventListener('ended', () => {
     onEnd();
-    activeAudio = null;
+    if (activeAudio === audio) activeAudio = null;
   });
 
-  activeAudio.addEventListener('error', (e) => {
-    console.error("Audio playback error", e);
+  audio.addEventListener('error', () => {
+    console.error('Audio playback error: failed to load or play audio from StreamElements API.');
     onEnd();
-    activeAudio = null;
+    if (activeAudio === audio) activeAudio = null;
+  });
+
+  // CRITICAL FIX: Call play() DIRECTLY here — inside the synchronous user gesture
+  // context (the button click). Waiting for 'canplaythrough' breaks autoplay policy
+  // because that event fires asynchronously, after the browser's gesture context expires,
+  // causing NotAllowedError in Chrome/Firefox/Safari.
+  audio.play().catch((err: Error) => {
+    console.error('Audio play() rejected:', err.message);
+    onEnd();
+    if (activeAudio === audio) activeAudio = null;
   });
 };
 
 export const stopAudio = () => {
   if (activeAudio) {
     activeAudio.pause();
+    activeAudio.src = ''; // Release the media resource
     activeAudio = null;
-  }
-  if (window.speechSynthesis) {
-    window.speechSynthesis.cancel();
   }
 };
 
