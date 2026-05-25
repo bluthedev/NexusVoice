@@ -1,7 +1,7 @@
 let activeAudio: HTMLAudioElement | null = null;
 let activeObjectUrl: string | null = null;
 
-/** Revoke any active blob URL and release the audio element. */
+/** Stop and clean up any currently active audio + blob URL. */
 const cleanupAudio = () => {
   if (activeAudio) {
     activeAudio.pause();
@@ -15,10 +15,43 @@ const cleanupAudio = () => {
 };
 
 /**
- * Fetches audio from StreamElements TTS API as a blob (so we can validate
- * the full response before playing), then plays it via a local blob URL.
+ * Calls the backend /tts endpoint (Google Cloud Neural2 TTS) and returns
+ * the audio as a Blob. The backend handles authentication so no API key
+ * is needed on the frontend.
+ */
+const fetchAudioBlob = async (text: string): Promise<Blob> => {
+  const safeText = text.slice(0, 5000);
+
+  const response = await fetch('/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: safeText }),
+  });
+
+  if (!response.ok) {
+    // Try to extract a human-readable error from the backend JSON body
+    let errorMsg = `TTS request failed (${response.status})`;
+    try {
+      const errorData = await response.json();
+      errorMsg = errorData.error ?? errorMsg;
+    } catch { /* ignore parse failures */ }
+    throw new Error(errorMsg);
+  }
+
+  const blob = await response.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error('The TTS service returned empty audio. Please try again.');
+  }
+
+  return blob;
+};
+
+/**
+ * Synthesizes `text` via Google Cloud TTS on the backend, then plays it
+ * using an HTML5 Audio element backed by a local blob URL.
  *
- * Returning a Promise lets App.tsx await the full lifecycle and surface errors.
+ * Returns a Promise that resolves when playback ends, or rejects on error.
+ * The caller (App.tsx) awaits this to drive loading/playing/error states.
  */
 export const playText = async (
   text: string,
@@ -27,29 +60,11 @@ export const playText = async (
 ): Promise<void> => {
   cleanupAudio();
 
-  const safeText = text.slice(0, 400);
-  const encodedText = encodeURIComponent(safeText);
-  const apiUrl = `https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodedText}`;
+  // Fetch the full audio blob from the backend before touching the Audio API.
+  // This validates the response and avoids the "plays for a second then stops"
+  // problem caused by streaming cross-origin URLs into HTMLAudioElement.
+  const blob = await fetchAudioBlob(text);
 
-  // --- Step 1: Fetch the full audio blob ---
-  // This validates the API response (status, content-type, non-empty body)
-  // BEFORE we try to play anything, preventing the "plays for a second then stops"
-  // symptom caused by the browser receiving an error body from the stream.
-  const response = await fetch(apiUrl);
-
-  if (!response.ok) {
-    throw new Error(`TTS API returned ${response.status} ${response.statusText}. Try again or shorten the text.`);
-  }
-
-  const blob = await response.blob();
-
-  if (!blob || blob.size === 0) {
-    throw new Error('TTS API returned empty audio. The text may be unsupported or the service is unavailable.');
-  }
-
-  // --- Step 2: Create a local blob URL and play ---
-  // Playing from a blob:// URL is immune to CORS, streaming interruptions,
-  // and ensures the full audio is available before playback starts.
   const blobUrl = URL.createObjectURL(blob);
   activeObjectUrl = blobUrl;
 
@@ -66,16 +81,16 @@ export const playText = async (
     });
 
     audio.addEventListener('error', () => {
-      const msg = 'Audio playback failed after loading. Your browser may not support this audio format.';
+      const msg = 'Audio playback failed after loading.';
       console.error(msg);
       cleanupAudio();
       onEnd();
       reject(new Error(msg));
     });
 
-    // play() is called here, inside the async chain that was started by a user
-    // click — modern browsers preserve user-activation across promise microtasks
-    // when the chain originates from a gesture, so autoplay policy is satisfied.
+    // play() is called here inside the async chain started by the user's click.
+    // Modern browsers preserve user-activation across microtasks, so autoplay
+    // policy is satisfied even though we awaited the fetch above.
     audio.play().catch((err: Error) => {
       cleanupAudio();
       onEnd();
@@ -84,62 +99,31 @@ export const playText = async (
   });
 };
 
+/** Immediately stop any active playback and release resources. */
 export const stopAudio = () => {
   cleanupAudio();
 };
 
-export const downloadAudio = async (text: string, format: 'mp3' | 'wav' | 'mp4' = 'wav') => {
-  if (!text.trim()) throw new Error("No text to download");
+/**
+ * Synthesizes `text` via the backend and triggers a browser download.
+ * Supports 'mp3', 'wav', and 'mp4' file extensions (all backed by MP3 audio).
+ */
+export const downloadAudio = async (
+  text: string,
+  format: 'mp3' | 'wav' | 'mp4' = 'mp3',
+): Promise<void> => {
+  if (!text.trim()) throw new Error('No text to convert.');
 
-  // Limit text length to avoid URI Too Long errors on public APIs
-  const safeText = text.slice(0, 400); 
-  const encodedText = encodeURIComponent(safeText);
-  const url = `https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodedText}`;
+  const blob = await fetchAudioBlob(text);
+  const downloadUrl = URL.createObjectURL(blob);
 
-  let retries = 3;
-  let delay = 1000;
-  let response;
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = downloadUrl;
+  a.download = `nexus_audio_export.${format}`;
+  document.body.appendChild(a);
+  a.click();
 
-  while (retries > 0) {
-    try {
-      response = await fetch(url);
-      if (response.ok) break;
-      
-      // Don't retry on client errors (except 429 Too Many Requests)
-      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-        throw new Error(`Client error: ${response.status}`);
-      }
-    } catch (error) {
-      if (retries === 1) throw error;
-    }
-    
-    retries--;
-    if (retries > 0) {
-      await new Promise(resolve => setTimeout(resolve, delay));
-      delay *= 2; // Exponential backoff
-    }
-  }
-
-  if (!response || !response.ok) {
-    throw new Error(`Failed to fetch audio after retries. Status: ${response?.status}`);
-  }
-
-  try {
-    const blob = await response.blob();
-    const downloadUrl = window.URL.createObjectURL(blob);
-    
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = downloadUrl;
-    // Save as requested format (though underlying might be mp3, players handle it)
-    a.download = `nexus_audio_export.${format}`; 
-    document.body.appendChild(a);
-    a.click();
-    
-    window.URL.revokeObjectURL(downloadUrl);
-    document.body.removeChild(a);
-  } catch (error) {
-    console.error('Download failed:', error);
-    throw new Error('Failed to generate audio file.');
-  }
+  URL.revokeObjectURL(downloadUrl);
+  document.body.removeChild(a);
 };

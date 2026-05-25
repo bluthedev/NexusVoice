@@ -310,6 +310,77 @@ app.post('/api-proxy', async (req, res) => {
   }
 });
 
+// Apply the rate limiter to the /tts route
+app.use('/tts', proxyLimiter);
+
+/**
+ * Google Cloud Text-to-Speech endpoint.
+ * Uses the same Application Default Credentials as the rest of the backend.
+ * Returns raw MP3 audio bytes so the frontend can play or download them.
+ */
+app.post('/tts', async (req, res) => {
+  const { text } = req.body;
+
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: 'text field is required in the request body.' });
+  }
+
+  // Google Cloud TTS supports up to 5000 bytes of input text
+  const safeText = text.slice(0, 5000);
+
+  try {
+    const accessToken = await getAccessToken(res);
+    if (!accessToken) return;
+
+    console.log(`[TTS] Synthesizing ${safeText.length} chars via Google Cloud Neural2...`);
+
+    const ttsResponse = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'X-Goog-User-Project': GOOGLE_CLOUD_PROJECT,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        input: { text: safeText },
+        voice: {
+          languageCode: 'en-US',
+          name: 'en-US-Neural2-D',   // High-quality male neural voice
+        },
+        audioConfig: {
+          audioEncoding: 'MP3',
+          speakingRate: 0.95,         // Slightly slower for clarity
+          pitch: 0,
+        },
+      }),
+    });
+
+    if (!ttsResponse.ok) {
+      const errorBody = await ttsResponse.text();
+      console.error(`[TTS] Google Cloud TTS error ${ttsResponse.status}: ${errorBody}`);
+      return res.status(ttsResponse.status).json({
+        error: `Google Cloud TTS returned ${ttsResponse.status}`,
+        details: errorBody,
+      });
+    }
+
+    const { audioContent } = await ttsResponse.json();
+    const audioBuffer = Buffer.from(audioContent, 'base64');
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioBuffer.length);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(audioBuffer);
+
+    console.log(`[TTS] Sent ${audioBuffer.length} bytes of Neural2 audio.`);
+  } catch (error) {
+    console.error('[TTS] Synthesis error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: `TTS synthesis failed: ${error.message}` });
+    }
+  }
+});
+
 const server = app.listen(PORT, API_BACKEND_HOST, () => {
   console.log(`Vertex AI Backend listening at http://localhost:${PORT}`);
 });

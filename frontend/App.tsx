@@ -264,7 +264,7 @@ function App() {
                 </button>
               </div>
               <p className="text-xs text-gray-500 mt-4 text-center">
-                * Export utilizes external neural processing. Max 400 chars per request.
+                * Powered by Google Cloud Neural2 TTS. Max 5000 chars per request.
               </p>
             </div>
           </GlowingCard>
