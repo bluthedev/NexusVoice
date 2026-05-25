@@ -8,6 +8,7 @@ import { GlowingCard } from './components/GlowingCard';
 function App() {
   const [text, setText] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false); // fetching audio blob
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,14 +75,22 @@ function App() {
     }
   }, []);
 
-  const handlePlay = () => {
+  const handlePlay = async () => {
     if (!text) return;
     setError(null);
-    playText(
-      text,
-      () => setIsPlaying(false), // onEnd
-      () => setIsPlaying(true)   // onStart
-    );
+    setIsLoading(true);  // show loading animation while blob is fetched
+    try {
+      await playText(
+        text,
+        () => { setIsPlaying(false); }, // onEnd
+        () => { setIsLoading(false); setIsPlaying(true); }, // onStart — audio is ready
+      );
+    } catch (err: any) {
+      setError(err.message || 'Failed to synthesize audio. Please try again.');
+    } finally {
+      setIsLoading(false);
+      setIsPlaying(false);
+    }
   };
 
   const handleStop = () => {
@@ -188,6 +197,8 @@ function App() {
           <GlowingCard glowColor="cyan" className="p-1">
             {isProcessing ? (
               <Loading3D text="Extracting Neural Patterns..." />
+            ) : isLoading ? (
+              <Loading3D text="Fetching Neural Audio..." />
             ) : isPlaying ? (
               <Loading3D text="Synthesizing Audio Stream..." />
             ) : (
@@ -208,11 +219,11 @@ function App() {
             <div className="grid grid-cols-2 gap-4 mb-6">
               <button
                 onClick={handlePlay}
-                disabled={!text || isProcessing || isPlaying}
+                disabled={!text || isProcessing || isLoading || isPlaying}
                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-cyan-600/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-600/30 hover:shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Play className="w-5 h-5" />
-                <span className="font-semibold">Initialize</span>
+                {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
+                <span className="font-semibold">{isLoading ? 'Loading...' : 'Initialize'}</span>
               </button>
               
               <button
